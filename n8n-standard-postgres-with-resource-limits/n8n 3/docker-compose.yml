@@ -91,8 +91,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "4.0"   # Limits the CPU usage to 4.
-          memory: 16G    # Limits the memory usage to 16.
+          cpus: "4.0"   # Limits the CPU usage to four cores.
+          memory: 16G    # Limits the memory usage to 16G.
           
 # Definition of named volumes to ensure data persistence
 # even if the containers are removed and recreated.
