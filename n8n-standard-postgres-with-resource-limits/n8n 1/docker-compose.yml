@@ -86,8 +86,13 @@ services:
     # 'n8n_data' is a named volume that will be mapped to the n8n configuration directory.
     volumes:
       - n8n_data:/home/node/.n8n
-    # Removed the 'deploy' section as requested to avoid system resource limits.
-    # This makes the setup more flexible, especially for development or non-swarm environments.
+    # Section to define the container's resource limits.
+    # This is primarily used in a Docker Swarm environment.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"   # Limits the CPU usage to one core.
+          memory: 4G    # Limits the memory usage to 4 Gigabytes.
 
 # Definition of named volumes to ensure data persistence
 # even if the containers are removed and recreated.
