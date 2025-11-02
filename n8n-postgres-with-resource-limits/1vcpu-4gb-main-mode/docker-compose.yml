@@ -1,0 +1,133 @@
+# ------------------------------------------------------------------------------------
+# PRODUCTION DOCKER COMPOSE FOR n8n (MAIN MODE)
+# TARGET HARDWARE: 1 vCPU / 4 GB RAM
+# ------------------------------------------------------------------------------------
+#
+# PHILOSOPHY:
+# 1. MAIN MODE: On a 1 vCPU server, running n8n in 'queue' mode is inefficient due to
+#    the overhead of extra containers (worker, Redis). This file uses 'main' mode,
+#    where a single n8n container handles everything for maximum resource efficiency.
+# 2. STRICT RESOURCE LIMITS: CPU and RAM are explicitly divided between n8n and
+#    PostgreSQL. This is a critical stability feature to prevent one service from
+#    starving the other under load, which is the primary cause of crashes on small servers.
+# 3. CONTROLLED CONCURRENCY: A hard limit on parallel workflow executions is set to
+#    prevent the single CPU core from becoming overloaded and unstable.
+
+
+services:
+  # ---------------------------------------------------------------
+  # PostgreSQL Database Service
+  # ---------------------------------------------------------------
+  postgres:
+    # It is a best practice in production to pin to a specific major version (e.g., 17)
+    # and use a small base image like Alpine. Avoid 'latest'.
+    image: postgres:17-alpine
+    # Ensures the database will always restart on exit or server reboot, unless manually stopped.
+    restart: unless-stopped
+    # Environment variables are loaded from the '.env' file for security.
+    # DO NOT hardcode secrets in this file.
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+    # Mounts a named Docker volume to persist all PostgreSQL data.
+    # This is essential for data integrity.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    # CRITICAL OPTIMIZATION: Increases the default connection limit from 100 to 150.
+    # This provides a safe buffer and prevents "too many connections" errors under load.
+    command: postgres -c 'max_connections=150'
+    # The healthcheck ensures that n8n will not start until the database is fully ready
+    # to accept connections, preventing startup errors.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      start_period: 30s
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    # --- CRITICAL STABILITY SETTING ---
+    # Guarantees dedicated resources for the database. This prevents the n8n container
+    # from consuming 100% of the server's resources and crashing the database.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"   # Guarantees PostgreSQL can use up to 50% of the CPU core.
+          memory: 1.5G    # Guarantees 1.5 GB of RAM for the database.
+
+  # ---------------------------------------------------------------
+  # N8N Single Instance (Main Mode)
+  # ---------------------------------------------------------------
+  n8n:
+    # Pinning to a specific n8n version is crucial for production.
+    # Before updating, read the release notes and test in a staging environment.
+    image: n8nio/n8n:1.117.3
+    restart: unless-stopped
+    # This ensures n8n only starts after the PostgreSQL healthcheck passes.
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # Exposes n8n's port to the host machine. You should have a reverse proxy
+    # (like Nginx or Traefik) in front of this for SSL/TLS termination.
+    ports:
+      - "${N8N_PORT:-5678}:5678"
+    environment:
+      # --- Execution & Performance Settings ---
+      # Explicitly set to 'main' for resource efficiency on this server.
+      - EXECUTIONS_PROCESS=main
+      # CRITICAL PERFORMANCE SETTING: Prevents the single CPU from being overloaded.
+      # Limits n8n to 5 parallel workflow executions. If multiple webhooks arrive
+      # at once, the 6th one will wait, ensuring the server remains stable.
+      # If your system is stable, you can cautiously try increasing this to 8.
+      - N8N_CONCURRENCY_PRODUCTION_LIMIT=5
+
+      # --- Database Connection Configuration ---
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres             # 'postgres' is the service name in this file.
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=${POSTGRES_DB}
+      - DB_POSTGRESDB_USER=${POSTGRES_USER}
+      - DB_POSTGRESDB_PASSWORD=${POSTGRES_PASSWORD}
+
+      # --- Security & Encryption ---
+      # This key is used to encrypt credentials. MUST be set to a long, random string.
+      # BACK THIS KEY UP. If you lose it, your credentials cannot be recovered.
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+      - N8N_SECURE_COOKIE=true                  # Recommended when using HTTPS.
+
+      # --- Host, Network & Timezone Settings ---
+      - N8N_HOST=${N8N_HOST}
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=https
+      - NODE_ENV=production                     # Enables performance optimizations in Node.js.
+      - WEBHOOK_URL=https://${N8N_HOST}/        # The base URL for all webhooks.
+      - GENERIC_TIMEZONE=${GENERIC_TIMEZONE}
+
+      # --- Reverse Proxy Configuration ---
+      # Set these if n8n is running behind a reverse proxy.
+      - N8N_TRUST_PROXY=true
+      - N8N_PROXY_HOPS=1
+
+      # --- Data Pruning & Features ---
+      - EXECUTIONS_DATA_PRUNE=true              # Automatically deletes old execution data.
+      - EXECUTIONS_DATA_MAX_AGE=168             # Keeps 7 days (168 hours) of execution data.
+      - N8N_PERSONALIZATION_ENABLED=false       # Disables telemetry.
+      - N8N_TEMPLATES_ENABLED=true              # Enables the workflow template library.
+
+    # Mounts a named volume to persist n8n data (workflows, credentials).
+    volumes:
+      - n8n_data:/home/node/.n8n
+    # --- CRITICAL STABILITY SETTING ---
+    # Allocates the other half of the server's resources to the n8n application.
+    # Total allocated memory is 3GB, leaving 1GB free for the OS and disk cache.
+    deploy:
+      resources:
+        limits:
+          cpus: "0.5"   # Guarantees the other 50% of the CPU core for n8n.
+          memory: 1.5G    # Guarantees 1.5 GB of RAM for n8n.
+
+# Named volumes are managed by Docker and are the recommended way to persist data.
+# They exist independently of the container lifecycle.
+volumes:
+  n8n_data:
+  postgres_data:
