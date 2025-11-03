@@ -71,7 +71,7 @@ services:
     # Exposes n8n's port to the host machine. You should have a reverse proxy
     # (like Nginx or Traefik) in front of this for SSL/TLS termination.
     ports:
-      - "${N8N_PORT:-5678}:5678"
+      - "${N8N_PORT}"
     environment:
       # --- Execution & Performance Settings ---
       # EXECUTIONS_PROCESS is deprecated and removed (no longer needed in recent versions)
